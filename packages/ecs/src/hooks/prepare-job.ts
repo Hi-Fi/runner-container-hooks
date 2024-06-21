@@ -46,7 +46,7 @@ export async function prepareJob(
   core.debug("Reading extensions");
   const extension = readExtensionFromFile()
   core.debug("copying externals");
-  await copyExternalsToRoot()
+  const extarnalsCopy =  copyExternalsToRoot()
 
   core.info("Creating container definitions");
   let containerDefinition: TaskProperties | undefined = undefined
@@ -147,6 +147,7 @@ export async function prepareJob(
   }
   core.debug(`Setting isAlpine to ${isAlpine}`)
   generateResponseFile(responseFile, createdTask, isAlpine)
+  await extarnalsCopy;
 }
 
 function generateResponseFile(
