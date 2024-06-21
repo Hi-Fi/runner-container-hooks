@@ -48,7 +48,6 @@ export async function handleWebsocket(session?: Session): Promise<string> {
       ssm.sendACK(wsConnection, agentMessage);
       if (agentMessage.payloadType === 1) {
         log = textDecoder.decode(agentMessage.payload)
-        process.stdout.write(textDecoder.decode(agentMessage.payload));
       } else if (agentMessage.payloadType === 17) {
         ssm.sendInitMessage(wsConnection, termOptions);
       }
