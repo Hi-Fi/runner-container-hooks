@@ -44,22 +44,3 @@ export const STEP_POD_NAME_SUFFIX_LENGTH = 8
 export const CONTAINER_EXTENSION_PREFIX = '$'
 export const JOB_CONTAINER_NAME = 'job'
 export const JOB_CONTAINER_EXTENSION_NAME = '$job'
-
-export class RunnerInstanceLabel {
-  private podName: string
-  constructor() {
-    this.podName = getRunnerPodName()
-  }
-
-  get key(): string {
-    return 'runner-pod'
-  }
-
-  get value(): string {
-    return this.podName
-  }
-
-  toString(): string {
-    return `runner-pod=${this.podName}`
-  }
-}

@@ -1,81 +1,114 @@
+import { RunContainerStepArgs } from 'hooklib/lib/interfaces'
 import { runContainerStep } from '../src/hooks'
-import { TestHelper } from './test-setup'
-import { ENV_HOOK_TEMPLATE_PATH } from '../src/k8s/utils'
-import * as fs from 'fs'
-import * as yaml from 'js-yaml'
-import { JOB_CONTAINER_EXTENSION_NAME } from '../src/hooks/constants'
+import { mockClient } from 'aws-sdk-client-mock'
+import { DescribeTasksCommand, ECSClient, ListTasksCommand, RegisterTaskDefinitionCommand, RunTaskCommand } from '@aws-sdk/client-ecs'
 
-jest.useRealTimers()
+const mockEcsClient = mockClient(ECSClient)
 
-let testHelper: TestHelper
+const runContainerStepData: RunContainerStepArgs = {
+  systemMountVolumes: [],
+  workingDirectory: '/opt/runner/',
+}
 
-let runContainerStepData: any
+beforeEach(() => {
+  mockEcsClient.reset();
+});
 
 describe('Run container step', () => {
-  beforeEach(async () => {
-    testHelper = new TestHelper()
-    await testHelper.initialize()
-    runContainerStepData = testHelper.getRunContainerStepDefinition()
-  })
-
-  afterEach(async () => {
-    await testHelper.cleanup()
-  })
+  process.env.GITHUB_WORKSPACE = '/_work'
+  process.env.ACTIONS_RUNNER_POD_NAME = 'TEST-RUN';
+  process.env.ACTIONS_RUNNER_PREPARE_JOB_TIMEOUT_SECONDS = '2';
 
   it('should not throw', async () => {
-    const exitCode = await runContainerStep(runContainerStepData.args)
+    const taskArn = 'arn:aws:ecs:us-east-1:012345678910:task/1dc5c17a-422b-4dc4-b493-371970c6c4d6';
+    mockEcsClient.on(RegisterTaskDefinitionCommand).resolves({
+      taskDefinition: {
+        taskDefinitionArn: 'arn:aws:ecs:us-east-1:012345678910:task-definition/hook-task'
+      }
+    })
+    mockEcsClient.on(RunTaskCommand).resolves({
+      tasks: [
+        {
+          taskArn
+        }
+      ]
+    })
+
+    mockEcsClient.on(ListTasksCommand).resolves({
+      taskArns: [
+        taskArn
+      ]
+    })
+    mockEcsClient.on(DescribeTasksCommand).resolvesOnce({
+      tasks: [
+        {
+          taskArn,
+          lastStatus: 'RUNNING'
+        }
+      ]
+    }).resolvesOnce({
+      tasks: [
+        {
+          taskArn,
+          lastStatus: 'STOPPED'
+        }
+      ]
+    }).resolvesOnce({
+      tasks: [
+        {
+          stopCode: 'EssentialContainerExited',
+          stoppedReason: 'Success'
+        }
+      ]
+    })
+
+    const exitCode = await runContainerStep(runContainerStepData)
     expect(exitCode).toBe(0)
   })
 
-  it('should run pod with extensions applied', async () => {
-    const extension = {
-      metadata: {
-        annotations: {
-          foo: 'bar'
-        },
-        labels: {
-          bar: 'baz'
-        }
-      },
-      spec: {
-        containers: [
-          {
-            name: JOB_CONTAINER_EXTENSION_NAME,
-            command: ['sh'],
-            args: ['-c', 'echo test']
-          },
-          {
-            name: 'side-container',
-            image: 'ubuntu:latest',
-            command: ['sh'],
-            args: ['-c', 'echo test']
-          }
-        ],
-        restartPolicy: 'Never',
-        securityContext: {
-          runAsUser: 1000,
-          runAsGroup: 3000
-        }
+  it('should throw error on failure', async () => {
+    const taskArn = 'arn:aws:ecs:us-east-1:012345678910:task/1dc5c17a-422b-4dc4-b493-371970c6c4d6';
+    mockEcsClient.on(RegisterTaskDefinitionCommand).resolves({
+      taskDefinition: {
+        taskDefinitionArn: 'arn:aws:ecs:us-east-1:012345678910:task-definition/hook-task'
       }
-    }
+    })
+    mockEcsClient.on(RunTaskCommand).resolves({
+      tasks: [
+        {
+          taskArn
+        }
+      ]
+    })
 
-    let filePath = testHelper.createFile()
-    fs.writeFileSync(filePath, yaml.dump(extension))
-    process.env[ENV_HOOK_TEMPLATE_PATH] = filePath
-    await expect(
-      runContainerStep(runContainerStepData.args)
-    ).resolves.not.toThrow()
-    delete process.env[ENV_HOOK_TEMPLATE_PATH]
-  })
+    mockEcsClient.on(ListTasksCommand).resolves({
+      taskArns: [
+        taskArn
+      ]
+    })
+    mockEcsClient.on(DescribeTasksCommand).resolvesOnce({
+      tasks: [
+        {
+          taskArn,
+          lastStatus: 'RUNNING'
+        }
+      ]
+    }).resolvesOnce({
+      tasks: [
+        {
+          taskArn,
+          lastStatus: 'STOPPED'
+        }
+      ]
+    }).resolvesOnce({
+      tasks: [
+        {
+          stopCode: 'EssentialContainerExited',
+          stoppedReason: 'Error: things failed'
+        }
+      ]
+    })
 
-  it('should shold have env variables available', async () => {
-    runContainerStepData.args.entryPoint = 'bash'
-    runContainerStepData.args.entryPointArgs = [
-      '-c',
-      "'if [[ -z $NODE_ENV ]]; then exit 1; fi'"
-    ]
-    await expect(
-      runContainerStep(runContainerStepData.args)
-    ).resolves.not.toThrow()
+    expect(runContainerStep(runContainerStepData)).rejects.toThrow('things failed')
   })
 })

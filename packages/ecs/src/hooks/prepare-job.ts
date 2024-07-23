@@ -1,7 +1,6 @@
 import * as core from '@actions/core'
 import * as io from '@actions/io'
 import { ContainerDefinition, Task } from '@aws-sdk/client-ecs'
-import * as k8s from '@kubernetes/client-node'
 import {
   JobContainerInfo,
   ContextPorts,
@@ -23,7 +22,6 @@ import {
   DEFAULT_CONTAINER_ENTRY_POINT,
   DEFAULT_CONTAINER_ENTRY_POINT_ARGS,
   generateContainerName,
-  readExtensionFromFile,
   fixArgs
 } from '../ecs/utils'
 import { JOB_CONTAINER_NAME } from './constants'
@@ -35,16 +33,12 @@ export interface TaskProperties {
 
 export async function prepareJob(
   args: PrepareJobArgs,
-  responseFile
+  responseFilePath: string
 ): Promise<void> {
   if (!args.container) {
     throw new Error('Job Container is required.')
   }
 
-  //await prunePods()
-
-  core.debug("Reading extensions");
-  const extension = readExtensionFromFile()
   core.debug("copying externals");
   const extarnalsCopy =  copyExternalsToRoot()
 
@@ -55,8 +49,7 @@ export async function prepareJob(
     containerDefinition = createContainerDefinition(
       args.container,
       JOB_CONTAINER_NAME,
-      true,
-      extension
+      true
     )
   }
 
@@ -67,8 +60,7 @@ export async function prepareJob(
       return createContainerDefinition(
         service,
         generateContainerName(service.image),
-        false,
-        extension
+        false
       )
     })
   }
@@ -90,7 +82,6 @@ export async function prepareJob(
       services.map(service => service.containerDefinition),
       volumes,
       args.container.registry,
-      extension
     )
   } catch (err) {
     core.debug(`createTask failed: ${JSON.stringify(err)}`)
@@ -116,20 +107,6 @@ export async function prepareJob(
     throw new Error(`task failed to come online with error: ${err}`)
   }
 
-  // ln -s /tmp/_work/$EXECID _work
-
-  // core.info("Creating needed volume paths as ECS doesn't support sub paths in mount");
-  // core.debug(await execTaskStep(
-  //   [
-  //     "ln",
-  //     "-s",
-  //     "/__w/externals",
-  //     "/__e"
-  //   ],
-  //   createdTask.taskArn,
-  //   containerDefinition?.name!
-  // ))
-
   core.debug('Job task is ready for traffic')
 
   let isAlpine = false
@@ -146,7 +123,7 @@ export async function prepareJob(
     throw new Error(`failed to determine if the task is alpine: ${message}`)
   }
   core.debug(`Setting isAlpine to ${isAlpine}`)
-  generateResponseFile(responseFile, createdTask, isAlpine)
+  generateResponseFile(responseFilePath, createdTask, isAlpine)
   await extarnalsCopy;
 }
 
@@ -166,6 +143,7 @@ function generateResponseFile(
     isAlpine
   }
 
+  console.dir(appTask.containers);
   const mainContainer = appTask.containers?.find(
     c => c.name === JOB_CONTAINER_NAME
   )
@@ -218,7 +196,6 @@ export function createContainerDefinition(
   container: JobContainerInfo,
   name: string,
   jobContainer = false,
-  _extension?: k8s.V1PodTemplateSpec
 ): TaskProperties {
   if (!container.entryPoint && jobContainer) {
     container.entryPoint = DEFAULT_CONTAINER_ENTRY_POINT
@@ -230,12 +207,12 @@ export function createContainerDefinition(
       name,
       image: container.image,
       portMappings: containerPorts(container),
-      entryPoint: [container.entryPoint],
+      entryPoint: container.entryPoint ? [container.entryPoint] : undefined,
       command: fixArgs(container.entryPointArgs),
       workingDirectory: container.workingDirectory,
       cpu: 512,
       memory: 1024,
-      environment: Object.entries(container.environmentVariables).map(entry => {
+      environment: Object.entries(container.environmentVariables ?? {}).map(entry => {
         return {
           name: entry[0],
           value: entry[1] as string
@@ -253,23 +230,4 @@ export function createContainerDefinition(
     },
     volumes: volumeMOuntSettings.volumes
   }
-
-  // podContainer.volumeMounts = containerVolumes(
-  //   container.userMountVolumes,
-  //   jobContainer
-  // )
-
-  // if (!extension) {
-  //   return podContainer
-  // }
-
-  // const from = extension.spec?.containers?.find(
-  //   c => c.name === CONTAINER_EXTENSION_PREFIX + name
-  // )
-
-  // if (from) {
-  //   mergeContainerWithOptions(podContainer, from)
-  // }
-
-  // return podContainer
 }

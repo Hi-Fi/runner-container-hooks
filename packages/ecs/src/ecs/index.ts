@@ -1,12 +1,10 @@
 import * as core from '@actions/core'
 import { AssignPublicIp, ContainerDefinition, DeleteTaskDefinitionsCommand, DeregisterTaskDefinitionCommand, DescribeTaskDefinitionCommand, DescribeTasksCommand, ECSClient, ExecuteCommandCommand, ExecuteCommandCommandInput, ExecuteCommandCommandOutput, InvalidParameterException, ListTaskDefinitionsCommand, ListTasksCommand, NetworkMode, PortMapping, RegisterTaskDefinitionCommand, RunTaskCommand, StopTaskCommand, Task, TaskDefinitionStatus, waitUntilTasksRunning, waitUntilTasksStopped } from '@aws-sdk/client-ecs'
-import * as k8s from '@kubernetes/client-node'
 import { ContainerInfo, Registry } from 'hooklib'
 import {
   getJobPodName,
 } from '../hooks/constants'
 import {
-  fixArgs,
   handleWebsocket
 } from './utils'
 import { join } from 'path'
@@ -15,42 +13,9 @@ const ecsClient = new ECSClient()
 
 const cluster = process.env.ECS_CLUSTER_NAME;
 
-const DEFAULT_WAIT_FOR_POD_TIME_SECONDS = 10 * 60 // 10 min
+const DEFAULT_WAIT_FOR_TASK_TIME_SECONDS = 10 * 60 // 10 min
 
 export const POD_VOLUME_NAME = 'work'
-
-export const requiredPermissions = [
-  {
-    group: '',
-    verbs: ['get', 'list', 'create', 'delete'],
-    resource: 'pods',
-    subresource: ''
-  },
-  {
-    group: '',
-    verbs: ['get', 'create'],
-    resource: 'pods',
-    subresource: 'exec'
-  },
-  {
-    group: '',
-    verbs: ['get', 'list', 'watch'],
-    resource: 'pods',
-    subresource: 'log'
-  },
-  {
-    group: 'batch',
-    verbs: ['get', 'list', 'create', 'delete'],
-    resource: 'jobs',
-    subresource: ''
-  },
-  {
-    group: '',
-    verbs: ['create', 'delete', 'get', 'list'],
-    resource: 'secrets',
-    subresource: ''
-  }
-]
 
 export interface Volume {
   name: string
@@ -61,8 +26,7 @@ export async function createTask(
   jobTaskProperties?: ContainerDefinition,
   services?: ContainerDefinition[],
   volumes?: Volume[],
-  _registry?: Registry,
-  _extension?: k8s.V1PodTemplateSpec
+  _registry?: Registry
 ): Promise<Task> {
   const containers: ContainerDefinition[] = []
   if (jobTaskProperties) {
@@ -71,24 +35,6 @@ export async function createTask(
   if (services?.length) {
     containers.push(...services)
   }
-
-  // if (registry) {
-  //   const secret = await createDockerSecret(registry)
-  //   if (!secret?.metadata?.name) {
-  //     throw new Error(`created secret does not have secret.metadata.name`)
-  //   }
-  //   const secretReference = new k8s.V1LocalObjectReference()
-  //   secretReference.name = secret.metadata.name
-  //   appDefinition.spec.imagePullSecrets = [secretReference]
-  // }
-
-  // if (extension?.metadata) {
-  //   mergeObjectMeta(appDefinition, extension.metadata)
-  // }
-
-  // if (extension?.spec) {
-  //   mergePodSpecWithOptions(appDefinition.spec, extension.spec)
-  // }
 
   const taskCpu = containers.reduce((cpus, { cpu }) => {
     return cpus + (cpu || 0)
@@ -209,12 +155,14 @@ export async function waitForJobToComplete(jobName: string): Promise<void> {
 
 export async function waitForTaskRunning(
   taskArn: string,
-  maxTimeSeconds = DEFAULT_WAIT_FOR_POD_TIME_SECONDS
+  maxTimeSeconds = DEFAULT_WAIT_FOR_TASK_TIME_SECONDS
 ): Promise<void> {
 
+  core.debug(`Waiting for ${maxTimeSeconds} seconds for task ${taskArn} to come online`)
   const results = await waitUntilTasksRunning({
     client: ecsClient,
     maxWaitTime: maxTimeSeconds,
+    minDelay: 1,
   }, {
     tasks: [
       taskArn
@@ -229,12 +177,14 @@ export async function waitForTaskRunning(
 
 export async function waitForTaskStopped(
   taskArn: string,
-  maxTimeSeconds = DEFAULT_WAIT_FOR_POD_TIME_SECONDS
+  maxTimeSeconds = DEFAULT_WAIT_FOR_TASK_TIME_SECONDS
 ): Promise<void> {
 
+  core.debug(`Waiting for ${maxTimeSeconds} seconds for task ${taskArn} to stop`)
   const results = await waitUntilTasksStopped({
     client: ecsClient,
     maxWaitTime: maxTimeSeconds,
+    minDelay: 1,
   }, {
     tasks: [
       taskArn
@@ -262,7 +212,7 @@ export function getPrepareJobTimeoutSeconds(): number {
     process.env['ACTIONS_RUNNER_PREPARE_JOB_TIMEOUT_SECONDS']
 
   if (!envTimeoutSeconds) {
-    return DEFAULT_WAIT_FOR_POD_TIME_SECONDS
+    return DEFAULT_WAIT_FOR_TASK_TIME_SECONDS
   }
 
   const timeoutSeconds = parseInt(envTimeoutSeconds, 10)
@@ -270,7 +220,7 @@ export function getPrepareJobTimeoutSeconds(): number {
     core.warning(
       `Prepare job timeout is invalid ("${timeoutSeconds}"): use an int > 0`
     )
-    return DEFAULT_WAIT_FOR_POD_TIME_SECONDS
+    return DEFAULT_WAIT_FOR_TASK_TIME_SECONDS
   }
 
   return timeoutSeconds

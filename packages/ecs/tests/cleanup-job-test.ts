@@ -1,65 +1,102 @@
-import * as k8s from '@kubernetes/client-node'
-import { cleanupJob, prepareJob } from '../src/hooks'
-import { RunnerInstanceLabel } from '../src/hooks/constants'
-import { namespace } from '../src/k8s'
-import { TestHelper } from './test-setup'
+import { cleanupJob } from '../src/hooks'
+import { mockClient } from 'aws-sdk-client-mock'
+import { DeleteTaskDefinitionsCommand, DeregisterTaskDefinitionCommand, DescribeTaskDefinitionCommand, ECSClient, ListTaskDefinitionsCommand, ListTasksCommand } from '@aws-sdk/client-ecs'
 
-let testHelper: TestHelper
+const mockEcsClient = mockClient(ECSClient)
+
+beforeEach(() => {
+  mockEcsClient.reset();
+});
 
 describe('Cleanup Job', () => {
-  beforeEach(async () => {
-    testHelper = new TestHelper()
-    await testHelper.initialize()
-    let prepareJobData = testHelper.getPrepareJobDefinition()
-    const prepareJobOutputFilePath = testHelper.createFile(
-      'prepare-job-output.json'
-    )
-    await prepareJob(prepareJobData.args, prepareJobOutputFilePath)
-  })
-
-  afterEach(async () => {
-    await testHelper.cleanup()
-  })
-
-  it('should not throw', async () => {
+  process.env.ACTIONS_RUNNER_POD_NAME = 'TEST-RUN'
+  it('should not throw error when no tasks running', async () => {
+    mockEcsClient.on(ListTaskDefinitionsCommand).resolves({
+    })
+    mockEcsClient.on(ListTasksCommand).resolves({
+    })
     await expect(cleanupJob()).resolves.not.toThrow()
   })
 
-  it('should have no runner linked pods running', async () => {
-    await cleanupJob()
-    const kc = new k8s.KubeConfig()
-
-    kc.loadFromDefault()
-    const k8sApi = kc.makeApiClient(k8s.CoreV1Api)
-
-    const podList = await k8sApi.listNamespacedPod(
-      namespace(),
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      new RunnerInstanceLabel().toString()
-    )
-
-    expect(podList.body.items.length).toBe(0)
+  it('should not throw error when tasks still running without task definition', async () => {
+    mockEcsClient.on(ListTaskDefinitionsCommand).resolves({
+    })
+    mockEcsClient.on(ListTasksCommand).resolves({
+      taskArns: [
+        'arn:aws:ecs:us-east-1:012345678910:task/1dc5c17a-422b-4dc4-b493-371970c6c4d6'
+      ]
+    })
+    await expect(cleanupJob()).resolves.not.toThrow()
   })
 
-  it('should have no runner linked secrets', async () => {
-    await cleanupJob()
-    const kc = new k8s.KubeConfig()
+  it('should not throw error when tasks still running with task definition', async () => {
+    const testTaskDefinitionArn = 'arn:aws:ecs:us-east-1:012345678910:task-definition/hook-task'
+    mockEcsClient.on(ListTaskDefinitionsCommand).resolves({
+      taskDefinitionArns: [
+        testTaskDefinitionArn
+      ]
+    })
+    mockEcsClient.on(ListTasksCommand).resolves({
+      taskArns: [
+        'arn:aws:ecs:us-east-1:012345678910:task/1dc5c17a-422b-4dc4-b493-371970c6c4d6'
+      ]
+    })
+    mockEcsClient.on(DescribeTaskDefinitionCommand, {
+      taskDefinition: testTaskDefinitionArn,
+      include: ['TAGS']
+    }).resolves({
+      tags: [
+        {
+          key: 'NOT_REMOVABLE',
+          value: 'true'
+        }
+      ]
+    })
 
-    kc.loadFromDefault()
-    const k8sApi = kc.makeApiClient(k8s.CoreV1Api)
-
-    const secretList = await k8sApi.listNamespacedSecret(
-      namespace(),
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      new RunnerInstanceLabel().toString()
-    )
-
-    expect(secretList.body.items.length).toBe(0)
+    await expect(cleanupJob()).resolves.not.toThrow()
+    expect(mockEcsClient.commandCalls(DeleteTaskDefinitionsCommand).length).toEqual(0)
+    expect(mockEcsClient.commandCalls(DescribeTaskDefinitionCommand).length).toEqual(1)
   })
+
+  it('should remove task definition with specific tag', async () => {
+    const testId = 'test-id'
+    process.env.GITHUB_RUN_ID = testId;
+    const testTaskDefinitionArn = 'arn:aws:ecs:us-east-1:012345678910:task-definition/hook-task'
+    const otherTaskDefinitionArn = 'arn:aws:ecs:us-east-1:012345678910:task-definition/other-task'
+    mockEcsClient.on(ListTaskDefinitionsCommand).resolves({
+      taskDefinitionArns: [
+        testTaskDefinitionArn,
+        otherTaskDefinitionArn
+      ]
+    })
+    mockEcsClient.on(ListTasksCommand).resolves({
+    })
+    mockEcsClient.on(DescribeTaskDefinitionCommand, {
+      taskDefinition: testTaskDefinitionArn,
+      include: ['TAGS']
+    }).resolves({
+      tags: [
+        {
+          key: 'GITHUB_RUN_ID',
+          value: testId
+        }
+      ]
+    })
+    mockEcsClient.on(DescribeTaskDefinitionCommand, {
+      taskDefinition: otherTaskDefinitionArn,
+      include: ['TAGS']
+    }).resolves({
+      tags: [
+        {
+          key: 'OTHER_TASK_DEFINITION',
+          value: 'true'
+        }
+      ]
+    })
+
+    await expect(cleanupJob()).resolves.not.toThrow()
+    expect(mockEcsClient.commandCalls(DescribeTaskDefinitionCommand).length).toEqual(2)
+    expect(mockEcsClient.commandCalls(DeregisterTaskDefinitionCommand).length).toEqual(1)
+    expect(mockEcsClient.commandCalls(DeleteTaskDefinitionsCommand).length).toEqual(1)
+  });
 })

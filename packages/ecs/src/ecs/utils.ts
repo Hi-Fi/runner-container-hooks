@@ -401,6 +401,9 @@ function mergeLists<T>(base?: T[], from?: T[]): T[] {
   return b
 }
 
-export function fixArgs(args: string[]): string[] {
-  return shlex.split(args.join(' '))
+export function fixArgs(args?: string[]): string[] | undefined {
+  if (args) {
+    return shlex.split(args.join(' '))
+  }
+  return undefined
 }
