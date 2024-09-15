@@ -6,10 +6,10 @@ import {
   getJobPodName,
 } from '../hooks/constants'
 import {
-  fixArgs,
-  handleWebsocket
+  writeEntryPointScript
 } from './utils'
 import { join } from 'path'
+import { waitForJobCompletion } from 'src/watcher'
 
 const ecsClient = new ECSClient()
 
@@ -158,39 +158,18 @@ export async function createTask(
 
 export async function execTaskStep(
   command: string[],
-  taskArn: string,
-  containerName: string,
-): Promise<string> {
+  _taskArn: string,
+  _containerName: string,
+): Promise<boolean> {
 
-  //command = fixArgs(command)
-  const execCommand: ExecuteCommandCommandInput = {
-    command: command.join(' '),
-    interactive: true,
-    task: taskArn,
-    container: containerName,
-    cluster
-  }
-  let response: ExecuteCommandCommandOutput = {
-    $metadata: {}
-  };
+  const {jobId} = writeEntryPointScript(
+    '.',
+    '', // No entrypoint, as it just concats with args
+    command,
+  )
 
-  // Task can be running without having SSM agent available, so trying couple of times. Subsequent execs should pass on first try.
-  for (let index = 0; index < 3; index++) {
-    try {
-      response = await ecsClient.send(new ExecuteCommandCommand(execCommand));
-      break;
-    } catch (e: any) {
-      if (e instanceof InvalidParameterException) {
-        // wait for a moment, as probably task is not really running yet
-        await new Promise(resolve => setTimeout(resolve, 2000))
-      } else {
-        throw e;
-      }
-    }
-  }
-
-  return await handleWebsocket(response.session);
-
+  const rc = await waitForJobCompletion(jobId)
+  return rc.trim() === "0"
 }
 
 export async function waitForJobToComplete(jobName: string): Promise<void> {
@@ -296,13 +275,13 @@ export async function isTaskContainerAlpine(
     [
       'sh',
       '-c',
-      `'cat /etc/*release* | grep -i -e "^ID=*alpine*" > /dev/null ; echo $?'`
+      `'cat /etc/*release* | grep -i -e "^ID=*alpine*" > /dev/null'`
     ],
     taskArn,
     containerName
   )
 
-  return output.trim() === '0'
+  return output
 }
 
 class BackOffManager {

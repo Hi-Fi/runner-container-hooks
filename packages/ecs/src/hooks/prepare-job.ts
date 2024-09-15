@@ -27,6 +27,7 @@ import {
   fixArgs
 } from '../ecs/utils'
 import { JOB_CONTAINER_NAME } from './constants'
+import { existsSync, readFileSync } from 'fs'
 
 export interface TaskProperties {
   containerDefinition: ContainerDefinition
@@ -116,20 +117,6 @@ export async function prepareJob(
     throw new Error(`task failed to come online with error: ${err}`)
   }
 
-  // ln -s /tmp/_work/$EXECID _work
-
-  // core.info("Creating needed volume paths as ECS doesn't support sub paths in mount");
-  // core.debug(await execTaskStep(
-  //   [
-  //     "ln",
-  //     "-s",
-  //     "/__w/externals",
-  //     "/__e"
-  //   ],
-  //   createdTask.taskArn,
-  //   containerDefinition?.name!
-  // ))
-
   core.debug('Job task is ready for traffic')
 
   let isAlpine = false
@@ -203,14 +190,27 @@ function generateResponseFile(
   writeToResponseFile(responseFile, JSON.stringify(response))
 }
 
+/**
+ * Copies externals from runner to shared volume usable by tasks. Target directory /tmp/externals is mapped in runner creation in autoscaler app
+ */
 async function copyExternalsToRoot(): Promise<void> {
   const workspace = process.env['RUNNER_WORKSPACE']
   if (workspace) {
-    await io.cp(
-      path.join(workspace, '../../externals'),
-      path.join(workspace, '../externals'),
-      { force: true, recursive: true, copySourceDirectory: false }
-    )
+    if (
+      existsSync(path.join(workspace, '../../externals/externals.sum')) && 
+      existsSync('/tmp/externals/externals.sum') &&
+      readFileSync(path.join(workspace, '../../externals/externals.sum'), 'utf8') === readFileSync('/tmp/externals/externals.sum', 'utf8')
+    ) {
+      core.info('Provided externals version already exists at target, no need to copy');
+    } else {
+      core.debug('Copying externals');
+      // We need server binary at new job, so have to wait here
+      await io.cp(
+        path.join(workspace, '../../externals'),
+        '/tmp/externals',
+        { force: true, recursive: true, copySourceDirectory: false }
+      )
+    }
   }
 }
 
@@ -253,23 +253,4 @@ export function createContainerDefinition(
     },
     volumes: volumeMOuntSettings.volumes
   }
-
-  // podContainer.volumeMounts = containerVolumes(
-  //   container.userMountVolumes,
-  //   jobContainer
-  // )
-
-  // if (!extension) {
-  //   return podContainer
-  // }
-
-  // const from = extension.spec?.containers?.find(
-  //   c => c.name === CONTAINER_EXTENSION_PREFIX + name
-  // )
-
-  // if (from) {
-  //   mergeContainerWithOptions(podContainer, from)
-  // }
-
-  // return podContainer
 }

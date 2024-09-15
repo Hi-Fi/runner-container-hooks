@@ -212,7 +212,7 @@ export function writeEntryPointScript(
   entryPointArgs?: string[],
   prependPath?: string[],
   environmentVariables?: { [key: string]: string }
-): { containerPath: string; runnerPath: string } {
+): { containerPath: string; runnerPath: string, jobId: string } {
   let exportPath = ''
   if (prependPath?.length) {
     // TODO: remove compatibility with typeof prependPath === 'string' as we bump to next major version, the hooks will lose PrependPath compat with runners 2.293.0 and older
@@ -246,27 +246,20 @@ export function writeEntryPointScript(
     environmentPrefix = `env ${envBuffer.join(' ')} `
   }
 
-  // As ECS doesn't return/handle script status with exec command, printing that to output for parsing
   const content = `#!/bin/sh -l
-set -e
-finally() {
-  local exit_code="\${1:-0}"
-
-  echo "SCRIPT_RUN_STATUS: \${exit_code}"
-  exit "\${exit_code}"
-}
-trap 'finally $?' EXIT
 ${exportPath}
 cd ${workingDirectory} && \
 exec ${environmentPrefix} ${entryPoint} ${entryPointArgs?.length ? entryPointArgs.join(' ') : ''
     }
 `
-  const filename = `${uuidv4()}.sh`
+  const jobId: string = uuidv4();
+  const filename = `${jobId}.sh`
   const entryPointPath = `${process.env.RUNNER_TEMP}/${filename}`
   fs.writeFileSync(entryPointPath, content)
   return {
     containerPath: `/__w/_temp/${filename}`,
-    runnerPath: entryPointPath
+    runnerPath: entryPointPath,
+    jobId
   }
 }
 
