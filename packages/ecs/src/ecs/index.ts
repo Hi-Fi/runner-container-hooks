@@ -1,6 +1,5 @@
 import * as core from '@actions/core'
-import { AssignPublicIp, ContainerDefinition, DeleteTaskDefinitionsCommand, DeregisterTaskDefinitionCommand, DescribeTaskDefinitionCommand, DescribeTasksCommand, ECSClient, ExecuteCommandCommand, ExecuteCommandCommandInput, ExecuteCommandCommandOutput, InvalidParameterException, ListTaskDefinitionsCommand, ListTasksCommand, NetworkMode, PortMapping, RegisterTaskDefinitionCommand, RunTaskCommand, StopTaskCommand, Task, TaskDefinitionStatus, waitUntilTasksRunning, waitUntilTasksStopped } from '@aws-sdk/client-ecs'
-import * as k8s from '@kubernetes/client-node'
+import { AssignPublicIp, ContainerDefinition, DeleteTaskDefinitionsCommand, DeregisterTaskDefinitionCommand, DescribeTaskDefinitionCommand, DescribeTasksCommand, ECSClient, ListTaskDefinitionsCommand, ListTasksCommand, NetworkMode, PortMapping, RegisterTaskDefinitionCommand, RunTaskCommand, StopTaskCommand, Task, TaskDefinitionStatus, waitUntilTasksRunning, waitUntilTasksStopped } from '@aws-sdk/client-ecs'
 import { ContainerInfo, Registry } from 'hooklib'
 import {
   getJobPodName,
@@ -55,6 +54,7 @@ export const requiredPermissions = [
 export interface Volume {
   name: string
   rootDirectory?: string
+  fileSystemId?: string
 }
 
 export async function createTask(
@@ -62,7 +62,6 @@ export async function createTask(
   services?: ContainerDefinition[],
   volumes?: Volume[],
   _registry?: Registry,
-  _extension?: k8s.V1PodTemplateSpec
 ): Promise<Task> {
   const containers: ContainerDefinition[] = []
   if (jobTaskProperties) {
@@ -96,19 +95,22 @@ export async function createTask(
   const taskMemory = containers.reduce((memories, { memory }) => {
     return memories + (memory || 0)
   }, 0)
+
+  const collectedVolumes = volumes?.filter((volume1, i, volumeArray) => volumeArray.findIndex(volume2 => volume2.name === volume1.name) === i).map(volume => {
+    const rootDirectory = !process.env.EXECID && !volume.rootDirectory ? undefined : join(process.env.EXECID ?? '', volume.rootDirectory ?? '');
+    return {
+      name: volume.name,
+      efsVolumeConfiguration: {
+        fileSystemId: volume.fileSystemId ?? process.env.EFS_ID,
+        rootDirectory: volume.fileSystemId ? volume.rootDirectory : rootDirectory
+      }
+    }
+  });
+
   const storeTaskDefinitionCommand = new RegisterTaskDefinitionCommand({
     containerDefinitions: containers,
     family: getJobPodName(),
-    volumes: volumes?.filter((volume1, i, volumeArray) => volumeArray.findIndex(volume2 => volume2.name === volume1.name) === i).map(volume => {
-      const rootDirectory = !process.env.EXECID && !volume.rootDirectory ? undefined : join(process.env.EXECID ?? '', volume.rootDirectory ?? '');
-      return {
-        name: volume.name,
-        efsVolumeConfiguration: {
-          fileSystemId: process.env.EFS_ID,
-          rootDirectory
-        }
-      }
-    }),
+    volumes: collectedVolumes,
     requiresCompatibilities: [
       'FARGATE'
     ],

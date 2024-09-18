@@ -1,8 +1,8 @@
 import * as core from '@actions/core'
-import { Container, ContainerAppsAPIClient, Job, JobExecutionBase } from '@azure/arm-appcontainers'
+import { Container, ContainerAppsAPIClient, Job, JobExecutionBase, KnownJobExecutionRunningState } from '@azure/arm-appcontainers'
 import { DefaultAzureCredential } from '@azure/identity'
 import { writeEntryPointScript } from './utils'
-import { waitForJobCompletion } from 'src/watcher'
+// import { waitForJobCompletion } from 'src/watcher'
 
 const subscriptionId = process.env.SUBSCRIPTION_ID ?? "00000000-0000-0000-0000-000000000000";
 
@@ -86,21 +86,47 @@ export async function createJob(
   }
 }
 
-export async function execTaskStep(
-  command: string[],
-  _taskArn: string,
-  _containerName: string,
-): Promise<boolean> {
-
-  const {jobId} = writeEntryPointScript(
-    '.',
-    '', // No entrypoint, as it just concats with args
-    command,
-  )
-
-  const rc = await waitForJobCompletion(jobId)
-  return rc.trim() === "0"
+/**
+ * Wait for execution to stop. Polls job status for each 10 seconds.
+ * @param resourceGroupName Resource group containing the waited job
+ * @param jobName Name of the waited job
+ * @param jobExecutionName Execution to wait for
+ * @returns true if execution completed successfully, or false if there was an error.
+ */
+export async function waitJobToStop(resourceGroupName: string, jobName: string, jobExecutionName: string): Promise<boolean> {
+  const finalStates = [
+    KnownJobExecutionRunningState.Failed,
+    KnownJobExecutionRunningState.Stopped,
+    KnownJobExecutionRunningState.Succeeded,
+  ].map(state => state.toString());
+  return new Promise(resolve => {
+    const timer = setInterval(async () => {
+      const execution = await acaClient.jobExecution(resourceGroupName, jobName, jobExecutionName)
+      core.debug(`Execution ${execution.id} (name: ${execution.name}) has now status ${execution.status}. End time is set to ${execution.endTime}`);
+      if (execution.endTime || (execution.status && finalStates.includes(execution.status))) {
+        core.debug(`Execution ${jobExecutionName} ended with status ${execution.status}`)
+        clearInterval(timer);
+        resolve(execution.status === KnownJobExecutionRunningState.Succeeded)
+      }
+    }, 10000)
+  })
 }
+
+// export async function execTaskStep(
+//   command: string[],
+//   _taskArn: string,
+//   _containerName: string,
+// ): Promise<boolean> {
+
+//   const { jobId } = writeEntryPointScript(
+//     '.',
+//     '', // No entrypoint, as it just concats with args
+//     command,
+//   )
+
+//   const rc = await waitForJobCompletion(jobId)
+//   return rc.trim() === "0"
+// }
 
 export function getPrepareJobTimeoutSeconds(): number {
   const envTimeoutSeconds =
@@ -121,35 +147,47 @@ export function getPrepareJobTimeoutSeconds(): number {
   return timeoutSeconds
 }
 
-export async function isTaskContainerAlpine(
-  taskArn: string,
-  containerName: string
-): Promise<boolean> {
-  const output = await execTaskStep(
-    [
-      'sh',
-      '-c',
-      `'cat /etc/*release* | grep -i -e "^ID=*alpine*" > /dev/null'`
-    ],
-    taskArn,
-    containerName
-  )
+// export async function isTaskContainerAlpine(
+//   taskArn: string,
+//   containerName: string
+// ): Promise<boolean> {
+//   const output = await execTaskStep(
+//     [
+//       'sh',
+//       '-c',
+//       `'cat /etc/*release* | grep -i -e "^ID=*alpine*" > /dev/null'`
+//     ],
+//     taskArn,
+//     containerName
+//   )
 
-  return output
-}
+//   return output
+// }
 
 export async function pruneTask(): Promise<void> {
   const startedBy = process.env.GITHUB_RUN_ID;
   const resourceGroup = process.env.RG_NAME!;
-  core.debug(`Obtaining jobs with tag startedBy: ${startedBy}`)
+  core.debug(`Obtaining jobs with tag startedBy: ${startedBy} from resource group ${resourceGroup}`)
 
-  const jobs = acaClient.jobs.listByResourceGroup(process.env.RG_NAME!);
+  const jobs = acaClient.jobs.listByResourceGroup(resourceGroup);
 
   const prunes: Promise<any>[] = [];
+  
+  core.debug(`Checking received jobs for specific tag: startedBy=${startedBy}`);
+
+  // this loop works locally, but not when running in runner
   for await (const job of jobs) {
+    core.debug(`Checking job ${job.name}. Tag startedBy=${job.tags?.startedBy}`)
     if (job.tags?.startedBy === startedBy && job.name) {
-      core.debug(`Deleting job ${job.name}`)
-      prunes.push(acaClient.jobs.beginDelete(resourceGroup, job.name))
+      prunes.push(removeTemporaryJob(resourceGroup, job.name))
     }
-  } 
+  }
+
+  await Promise.all(prunes);
+  core.debug(`Cleaned up ${prunes.length} jobs`)
+}
+
+export async function removeTemporaryJob(resourceGroupName: string, jobName: string) {
+  core.debug(`Removing job ${jobName} from resource group ${resourceGroupName}`);
+  return acaClient.jobs.beginDeleteAndWait(resourceGroupName, jobName);
 }

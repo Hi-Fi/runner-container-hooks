@@ -1,7 +1,6 @@
 import * as core from '@actions/core'
 import * as io from '@actions/io'
 import { ContainerDefinition, Task } from '@aws-sdk/client-ecs'
-import * as k8s from '@kubernetes/client-node'
 import {
   JobContainerInfo,
   ContextPorts,
@@ -21,9 +20,7 @@ import {
 import {
   containerVolumes,
   DEFAULT_CONTAINER_ENTRY_POINT,
-  DEFAULT_CONTAINER_ENTRY_POINT_ARGS,
   generateContainerName,
-  readExtensionFromFile,
   fixArgs
 } from '../ecs/utils'
 import { JOB_CONTAINER_NAME } from './constants'
@@ -44,10 +41,8 @@ export async function prepareJob(
 
   //await prunePods()
 
-  core.debug("Reading extensions");
-  const extension = readExtensionFromFile()
   core.debug("copying externals");
-  const extarnalsCopy =  copyExternalsToRoot()
+  await copyExternalsToRoot()
 
   core.info("Creating container definitions");
   let containerDefinition: TaskProperties | undefined = undefined
@@ -57,7 +52,6 @@ export async function prepareJob(
       args.container,
       JOB_CONTAINER_NAME,
       true,
-      extension
     )
   }
 
@@ -69,7 +63,6 @@ export async function prepareJob(
         service,
         generateContainerName(service.image),
         false,
-        extension
       )
     })
   }
@@ -91,7 +84,6 @@ export async function prepareJob(
       services.map(service => service.containerDefinition),
       volumes,
       args.container.registry,
-      extension
     )
   } catch (err) {
     core.debug(`createTask failed: ${JSON.stringify(err)}`)
@@ -134,7 +126,6 @@ export async function prepareJob(
   }
   core.debug(`Setting isAlpine to ${isAlpine}`)
   generateResponseFile(responseFile, createdTask, isAlpine)
-  await extarnalsCopy;
 }
 
 function generateResponseFile(
@@ -218,11 +209,9 @@ export function createContainerDefinition(
   container: JobContainerInfo,
   name: string,
   jobContainer = false,
-  _extension?: k8s.V1PodTemplateSpec
 ): TaskProperties {
   if (!container.entryPoint && jobContainer) {
     container.entryPoint = DEFAULT_CONTAINER_ENTRY_POINT
-    container.entryPointArgs = DEFAULT_CONTAINER_ENTRY_POINT_ARGS
   }
   const volumeMOuntSettings = containerVolumes(container.userMountVolumes, jobContainer);
   return {

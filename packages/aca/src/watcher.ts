@@ -44,10 +44,11 @@ export async function waitForJobCompletion(jobId: string): Promise<string> {
     core.debug(`Waiting for job ${jobId} to complete (waiting for file ${waitedFile})`)
 
     return new Promise(resolve => {
-        setInterval(async () => {
+        const timer = setInterval(async () => {
             if (existsSync(waitedFile)) {
                 core.debug(`Job ${jobId} completed (file ${waitedFile} exists)`)
                 await tailer.quit()
+                clearInterval(timer);
                 resolve(readFileSync(waitedFile, { encoding: 'utf-8' }))
             }
         }, 2000)

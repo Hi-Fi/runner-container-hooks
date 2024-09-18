@@ -162,7 +162,6 @@ export function writeEntryPointScript(
     environmentPrefix = `env ${envBuffer.join(' ')} `
   }
 
-  // As ECS doesn't return/handle script status with exec command, printing that to output for parsing
   const content = `#!/bin/sh -l
 ${exportPath}
 cd ${workingDirectory} && \

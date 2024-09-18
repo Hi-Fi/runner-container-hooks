@@ -1,7 +1,8 @@
 import * as core from '@actions/core'
 import { Task } from '@aws-sdk/client-ecs'
+import { CloudWatchLogsClient, CreateLogStreamCommand, StartLiveTailCommand, StartLiveTailCommandOutput } from "@aws-sdk/client-cloudwatch-logs";
 import { RunContainerStepArgs } from 'hooklib'
-import { createTask, getPrepareJobTimeoutSeconds, pruneTask, waitForTaskRunning, waitForTaskStopped } from 'src/ecs'
+import { createTask, waitForTaskStopped } from 'src/ecs'
 import {
   containerVolumes,
   fixArgs
@@ -16,14 +17,6 @@ export async function runContainerStep(
     throw new Error('Building container actions is not currently supported')
   }
 
-  // let secretName: string | undefined = undefined
-  // if (stepContainer.environmentVariables) {
-  //   secretName = await createSecretForEnvs(stepContainer.environmentVariables)
-  // }
-
-  // const extension = readExtensionFromFile()
-
-  // core.debug(`Created secret ${secretName} for container job envs`)
   const container = createContainerDefinition(stepContainer)
 
   let createdTask: Task | undefined = undefined
@@ -44,81 +37,86 @@ export async function runContainerStep(
     throw new Error('created task should have ARN')
   }
 
-  core.debug(
-    `Job task created, waiting for it to come online ${createdTask.taskArn}`
-  )
+  const client = new CloudWatchLogsClient();
 
-  try {
-    await waitForTaskRunning(
-      createdTask.taskArn,
-      getPrepareJobTimeoutSeconds()
-    )
-  } catch (err) {
-    await pruneTask()
-    throw new Error(`task failed to come online with error: ${err}`)
+  const logGroupName = container.containerDefinition.logConfiguration?.options?.['awslogs-group'];
+  const logStreamPrefix = container.containerDefinition.logConfiguration?.options?.['awslogs-stream-prefix'];
+
+
+  if (logGroupName && logStreamPrefix) {
+    const [_arn, _aws, _service, region, account, _task] = createdTask.taskArn.split(':');
+
+
+    const logGroupArn = `arn:aws:logs:${region}:${account}:log-group:${logGroupName}`
+    const logStreamName = `${logStreamPrefix}/${container.containerDefinition.name}/${createdTask.taskArn?.split('/').pop()}`;
+
+    const createLogGroup = new CreateLogStreamCommand({
+      logGroupName: logGroupName,
+      logStreamName,
+    })
+
+    await client.send(createLogGroup)
+
+    const command = new StartLiveTailCommand({
+      logGroupIdentifiers: [
+        logGroupArn
+      ],
+      logStreamNames: [
+        logStreamName
+      ],
+    });
+
+    // https://docs.aws.amazon.com/code-library/latest/ug/cloudwatch-logs_example_cloudwatch-logs_StartLiveTail_section.html
+    try {
+      try {
+        core.debug(`Creating log stream ${createLogGroup.input.logStreamName} to log group ${createLogGroup.input.logGroupName} to be sure to have something to tail`);
+        await client.send(createLogGroup)
+      } catch (e) {
+        const err = e as Error;
+        core.debug(`Couldn't create tail stream. Error: ${err.message}`)
+      }
+      core.debug(`Trying to tail logs from task ${createdTask.taskArn}`);
+      core.debug(`Using log group ${logGroupArn} and stream ${logStreamName}`);
+      const response = await client.send(command);
+      handleResponseAsync(response);
+    } catch (e) {
+      const err = e as Error;
+      core.warning(`Couldn't tail logs. Error: ${err.message}`)
+    }
   }
+
+  core.debug(
+    `Job task created, waiting for it to complete ${createdTask.taskArn}`
+  )
 
   await waitForTaskStopped(
     createdTask.taskArn,
   )
 
+  client.destroy();
+
   return 0;
+}
 
-
-  // let job: k8s.V1Job
-  // try {
-  //   job = await createJob(container, extension)
-  // } catch (err) {
-  //   core.debug(`createJob failed: ${JSON.stringify(err)}`)
-  //   const message = (err as any)?.response?.body?.message || err
-  //   throw new Error(`failed to run script step: ${message}`)
-  // }
-
-  // if (!job.metadata?.name) {
-  //   throw new Error(
-  //     `Expected job ${JSON.stringify(
-  //       job
-  //     )} to have correctly set the metadata.name`
-  //   )
-  // }
-  // core.debug(`Job created, waiting for pod to start: ${job.metadata?.name}`)
-
-  // let podName: string
-  // try {
-  //   podName = await getContainerJobPodName(job.metadata.name)
-  // } catch (err) {
-  //   core.debug(`getContainerJobPodName failed: ${JSON.stringify(err)}`)
-  //   const message = (err as any)?.response?.body?.message || err
-  //   throw new Error(`failed to get container job pod name: ${message}`)
-  // }
-
-  // await waitForTaskRunning(
-  //   podName,
-  // )
-  // core.debug('Container step is running or complete, pulling logs')
-
-  // await getPodLogs(podName, JOB_CONTAINER_NAME)
-
-  // core.debug('Waiting for container job to complete')
-  // await waitForJobToComplete(job.metadata.name)
-
-  // // pod has failed so pull the status code from the container
-  // const status = await getPodStatus(podName)
-  // if (status?.phase === 'Succeeded') {
-  //   return 0
-  // }
-  // if (!status?.containerStatuses?.length) {
-  //   core.error(
-  //     `Can't determine container status from response:  ${JSON.stringify(
-  //       status
-  //     )}`
-  //   )
-  //   return 1
-  // }
-  // const exitCode =
-  //   status.containerStatuses[status.containerStatuses.length - 1].state
-  //     ?.terminated?.exitCode
-  // return Number(exitCode) || 1
+async function handleResponseAsync(response: StartLiveTailCommandOutput) {
+  if (response.responseStream)
+    try {
+      for await (const event of response.responseStream) {
+        if (event.sessionStart !== undefined) {
+          core.debug(JSON.stringify(event.sessionStart, null, 2));
+        } else if (event.sessionUpdate !== undefined && event.sessionUpdate.sessionResults) {
+          for (const logEvent of event.sessionUpdate.sessionResults) {
+            console.log(logEvent.message);
+          }
+        } else {
+          core.debug('Unknown event:');
+          core.debug(JSON.stringify(event, null, 2));
+        }
+      }
+    } catch (err) {
+      // On-stream exceptions are captured here
+      core.debug((err as Error).message)
+    }
 }
 
 function createContainerDefinition(
@@ -154,39 +152,4 @@ function createContainerDefinition(
     },
     volumes: volumeMOuntSettings.volumes
   }
-  // const podContainer = new k8s.V1Container()
-  // podContainer.name = JOB_CONTAINER_NAME
-  // podContainer.image = container.image
-  // podContainer.workingDir = container.workingDirectory
-  // podContainer.command = container.entryPoint
-  //   ? [container.entryPoint]
-  //   : undefined
-  // podContainer.args = container.entryPointArgs?.length
-  //   ? fixArgs(container.entryPointArgs)
-  //   : undefined
-
-  // if (secretName) {
-  //   podContainer.envFrom = [
-  //     {
-  //       secretRef: {
-  //         name: secretName,
-  //         optional: false
-  //       }
-  //     }
-  //   ]
-  // }
-  // podContainer.volumeMounts = containerVolumes(undefined, false, true)
-
-  // if (!extension) {
-  //   return podContainer
-  // }
-
-  // const from = extension.spec?.containers?.find(
-  //   c => c.name === JOB_CONTAINER_EXTENSION_NAME
-  // )
-  // if (from) {
-  //   mergeContainerWithOptions(podContainer, from)
-  // }
-
-  // return podContainer
 }

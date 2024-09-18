@@ -15,6 +15,7 @@ Some things are expected to be set when using these hooks
 - The `ECS_SUBNETS` env should be set to subnet(s) task should utilize
 - The `ECS_SECURITY_GROUPS` env should be set to securoty group(s) task should utilize
 - The `EFS_ID` env should be set to ID of the Elastic File Service (EFS) which is used for shared storage between tasks
+- The `EXTERNALS_EFS_ID` env should be set to ID of the Elastic File Service (EFS) which is used for external binaries coming from runner image (e.g. Node16, Node20 etc.)
 - The `EXECID` env should be set to random execution ID used by specific job. Has to be universally unique to prevent jobs to mix their sources
 - Some actions runner env's are expected to be set. These are set automatically by the runner.
     - `RUNNER_WORKSPACE` is expected to be set to the workspace of the runner

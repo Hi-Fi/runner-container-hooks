@@ -144,6 +144,9 @@ function generateResponseFile(
   writeToResponseFile(responseFile, JSON.stringify(response))
 }
 
+/**
+ * Copies externals from runner to shared volume usable by tasks. Target directory /tmp/externals is mapped in runner creation in autoscaler app
+ */
 async function copyExternalsToRoot(): Promise<void> {
   const workspace = RUNNER_WORKSPACE
   if (workspace) {

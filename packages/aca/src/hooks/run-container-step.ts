@@ -1,6 +1,6 @@
 import * as core from '@actions/core'
 import { RunContainerStepArgs } from 'hooklib'
-import { createJob, CreateJobResponse, pruneTask } from 'src/aca'
+import { createJob, CreateJobResponse, pruneTask, removeTemporaryJob, waitJobToStop } from 'src/aca'
 import {
   containerVolumes,
   fixArgs} from '../aca/utils'
@@ -30,15 +30,23 @@ export async function runContainerStep(
     throw new Error(`failed to create job task: ${message}`)
   }
 
-  if (!createdTask?.execution.id) {
-    throw new Error('created task should have ID')
+  if (!createdTask.job.name) {
+    throw new Error('created job should have name')
+  }
+
+  if (!createdTask?.execution.name) {
+    throw new Error('created task should have name')
   }
 
   core.debug(
-    `Job task created, waiting for it to come online ${createdTask.execution.id}`
+    `Job execution created, waiting for it to complete ${createdTask.execution.name}`
   )
-  
-  return 0;
+
+  const succeeded = await waitJobToStop(process.env.RG_NAME!, createdTask.job.name, createdTask.execution.name)
+
+  await removeTemporaryJob(process.env.RG_NAME!, createdTask.job.name);
+
+  return succeeded ? 0 : 1;
 }
 
 function createContainerDefinition(
@@ -48,8 +56,12 @@ function createContainerDefinition(
   return {
     name: JOB_CONTAINER_NAME,
     image: container.image,
-    command: [container.entryPoint],
-    args: fixArgs(container.entryPointArgs),
+    command: container.entryPoint
+    ? [container.entryPoint]
+    : undefined,
+    args: container.entryPointArgs?.length
+    ? fixArgs(container.entryPointArgs)
+    : undefined,
     env: [
       ...Object.entries(container.environmentVariables).map(entry => {
         return {
@@ -60,7 +72,7 @@ function createContainerDefinition(
     ],
     resources: {
       cpu: 0.5,
-      memory: '1024Gb'
+      memory: '1Gi'
     },
     volumeMounts
   }

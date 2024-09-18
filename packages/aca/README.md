@@ -16,6 +16,9 @@ Some things are expected to be set when using these hooks
 - The `STORAGE_NAME` env should be set to name od storage created in ACA environment that's used for job specific sources
 - The `EXTERNAL_STORAGE_NAME` env should be set to name of storage created in ACA environment that's used for external binaries coming from runner image (e.g. Node16, Node20 etc.)
 - The `EXECID` env should be set to random execution ID used by specific job. Has to be universally unique to prevent jobs to mix their sources
+- Some actions runner env's are expected to be set. These are set automatically by the runner.
+    - `RUNNER_WORKSPACE` is expected to be set to the workspace of the runner
+    - `GITHUB_WORKSPACE` is expected to be set to the workspace of the job
 
 ## Limitations
 - A [job containers](https://docs.github.com/en/actions/using-jobs/running-jobs-in-a-container) will be required for all jobs
