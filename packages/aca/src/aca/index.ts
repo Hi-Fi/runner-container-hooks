@@ -2,7 +2,7 @@ import * as core from '@actions/core'
 import { Container, ContainerAppsAPIClient, Job, JobExecutionBase, KnownJobExecutionRunningState } from '@azure/arm-appcontainers'
 import { DefaultAzureCredential } from '@azure/identity'
 import { writeEntryPointScript } from './utils'
-// import { waitForJobCompletion } from 'src/watcher'
+import { waitForJobCompletion } from 'src/watcher'
 
 const subscriptionId = process.env.SUBSCRIPTION_ID ?? "00000000-0000-0000-0000-000000000000";
 
@@ -112,21 +112,21 @@ export async function waitJobToStop(resourceGroupName: string, jobName: string, 
   })
 }
 
-// export async function execTaskStep(
-//   command: string[],
-//   _taskArn: string,
-//   _containerName: string,
-// ): Promise<boolean> {
+export async function execTaskStep(
+  command: string[],
+  _taskArn: string,
+  _containerName: string,
+): Promise<boolean> {
 
-//   const { jobId } = writeEntryPointScript(
-//     '.',
-//     '', // No entrypoint, as it just concats with args
-//     command,
-//   )
+  const { jobId } = writeEntryPointScript(
+    '.',
+    '', // No entrypoint, as it just concats with args
+    command,
+  )
 
-//   const rc = await waitForJobCompletion(jobId)
-//   return rc.trim() === "0"
-// }
+  const rc = await waitForJobCompletion(jobId)
+  return rc.trim() === "0"
+}
 
 export function getPrepareJobTimeoutSeconds(): number {
   const envTimeoutSeconds =
@@ -147,22 +147,22 @@ export function getPrepareJobTimeoutSeconds(): number {
   return timeoutSeconds
 }
 
-// export async function isTaskContainerAlpine(
-//   taskArn: string,
-//   containerName: string
-// ): Promise<boolean> {
-//   const output = await execTaskStep(
-//     [
-//       'sh',
-//       '-c',
-//       `'cat /etc/*release* | grep -i -e "^ID=*alpine*" > /dev/null'`
-//     ],
-//     taskArn,
-//     containerName
-//   )
+export async function isTaskContainerAlpine(
+  taskArn: string,
+  containerName: string
+): Promise<boolean> {
+  const output = await execTaskStep(
+    [
+      'sh',
+      '-c',
+      `'cat /etc/*release* | grep -i -e "^ID=*alpine*" > /dev/null'`
+    ],
+    taskArn,
+    containerName
+  )
 
-//   return output
-// }
+  return output
+}
 
 export async function pruneTask(): Promise<void> {
   const startedBy = process.env.GITHUB_RUN_ID;
